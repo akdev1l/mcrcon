@@ -49,6 +49,18 @@
  *
  * Version history:
  *
+ * 0.0.5
+ *  - Rcon receive buffer is now bigger (2024 bytes -> 10240 bytes).
+ *     * Thanks to 'gman_ftw' @ Bukkit forums.
+ *
+ *  - Fixed invalid error message when receiving empty rcon packet (10 bytes).
+ *     * Thanks to 'pkmnfrk' @ bukkit forums.
+ *
+ *  - Terminal mode now stops automatically when rcon socket is closed by server
+ *    or if packet size cannot be retrieved correctly.
+ *  - Client now tries to clean the incoming socket data if last package was out of spec.
+ *
+ *
  * 0.0.4
  *  - Reverted back to default getopts options error handler (opterr = 1).
  *    Custom error handler requires rewriting.
@@ -82,11 +94,11 @@
  *
  *
  * TODO:
+ *  - Make the receive buffer dynamic
+ *  - Change some of the packet size issues to fatal errors
  *  - Code cleanups
  *  - Check global variables (remove if possible)
  *  - Add some protocol checks (proper packet id check etc..)
- *  - Portability improvements
- *  - Optimizations?
  *  - Preprocessor (#ifdef / #ifndef) cleanups
  *  - Follow valve rcon protocol standard strictly?
  *  - Multiple packet support if minecraft supports it?!
@@ -126,10 +138,10 @@
 #define RCON_AUTH_RESPONSE      2
 #define RCON_PID                42
 
-/* safe value I think */
-#define DATA_BUFFSIZE 2048
+/* Safe value I think. This should me made dynamic for more stable performance! */
+#define DATA_BUFFSIZE 10240
 
-#define VERSION "0.0.4"
+#define VERSION "0.0.5"
 #define IN_NAME "mcrcon"
 #define VER_STR IN_NAME" "VERSION
 
@@ -157,6 +169,7 @@ rc_packet*      net_recv_packet(int sd);
 #ifdef _WIN32
 void            net_init_WSA(void);
 #endif
+int             net_clean_incoming(int sd, int size);
 
 rc_packet*      packet_build(int id, int cmd, char *s1);
 void            packet_print(rc_packet *packet);
@@ -435,16 +448,19 @@ rc_packet *net_recv_packet(int sd)
 
     if(ret == 0) {
         fprintf(stderr, "Connection lost.\n");
+        connection_alive = 0;
         return NULL;
     }
 
     if(ret != sizeof(int)) {
-        fprintf(stderr, "Warning: recv() failed. Invalid packet size (%d).\n", ret);
+        fprintf(stderr, "Error: recv() failed. Invalid packet size (%d).\n", ret);
+        connection_alive = 0;
         return NULL;
     }
 
     if(psize < 10 || psize > DATA_BUFFSIZE) {
         fprintf(stderr, "Warning: invalid packet size (%d). Must over 10 and less than %d.\n", psize, DATA_BUFFSIZE);
+        net_clean_incoming(sd, psize);
         return NULL;
     }
 
@@ -453,12 +469,26 @@ rc_packet *net_recv_packet(int sd)
     ret = recv(sd, (char *) &packet + sizeof(int), psize, 0);
     if(ret != psize) {
         fprintf(stderr, "Warning: recv() return value (%d) does not match expected packet size (%d).\n", ret, psize);
+        net_clean_incoming(sd, DATA_BUFFSIZE);
         return NULL;
     }
 
     return &packet;
 }
 
+int net_clean_incoming(int sd, int size)
+{
+    char tmp[size];
+
+    int ret = recv(sd, tmp, size, 0);
+
+    if(ret == 0) {
+        fprintf(stderr, "Connection lost.\n");
+        return 0;
+    }
+
+    return 1;
+}
 
 void print_color(int color)
 {
@@ -602,10 +632,14 @@ int rcon_command(int rsock, char *command)
     if(packet->id != RCON_PID) return 0; /* wrong packet id */
 
     if(!silent_mode) {
+        /*
         if(packet->size == 10) {
             printf("Unknown command \"%s\". Type \"help\" or \"?\" for help.\n", command);
         }
-        else packet_print(packet);
+        else
+        */
+        if(packet->size > 10)
+            packet_print(packet);
     }
 
     /* return 1 if world was saved */
