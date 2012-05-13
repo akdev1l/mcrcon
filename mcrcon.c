@@ -50,14 +50,18 @@
  * Version history:
  *
  * 0.0.5
+ *  - Program makes use of C99 feature (variable-length arrays) so "-std=gnu99" flag on
+ *    GCC-compiler must be used to avoid unecessary warnings.
+ *
  *  - Rcon receive buffer is now bigger (2024 bytes -> 10240 bytes).
  *     * Thanks to 'gman_ftw' @ Bukkit forums.
  *
  *  - Fixed invalid error message when receiving empty rcon packet (10 bytes).
  *     * Thanks to 'pkmnfrk' @ bukkit forums.
  *
- *  - Terminal mode now stops automatically when rcon socket is closed by server
+ *  - Terminal mode now closes automatically when rcon socket is closed by server
  *    or if packet size cannot be retrieved correctly.
+ *
  *  - Client now tries to clean the incoming socket data if last package was out of spec.
  *
  *
@@ -131,6 +135,10 @@
     #include <arpa/inet.h>
     #include <netdb.h>
 #endif
+
+/* absolute value macro
+#define absolute(x) (x < 0) ? (0 - x) : x
+*/
 
 #define RCON_EXEC_COMMAND       2
 #define RCON_AUTHENTICATE       3
@@ -467,9 +475,14 @@ rc_packet *net_recv_packet(int sd)
     packet.size = psize;
 
     ret = recv(sd, (char *) &packet + sizeof(int), psize, 0);
+    if(ret == 0) {
+        fprintf(stderr, "Connection lost.\n");
+        connection_alive = 0;
+        return NULL;
+    }
     if(ret != psize) {
         fprintf(stderr, "Warning: recv() return value (%d) does not match expected packet size (%d).\n", ret, psize);
-        net_clean_incoming(sd, DATA_BUFFSIZE);
+        net_clean_incoming(sd, DATA_BUFFSIZE); /* Should be enough. Needs some checking */
         return NULL;
     }
 
@@ -484,10 +497,10 @@ int net_clean_incoming(int sd, int size)
 
     if(ret == 0) {
         fprintf(stderr, "Connection lost.\n");
-        return 0;
+        connection_alive = 0;
     }
 
-    return 1;
+    return ret;
 }
 
 void print_color(int color)
