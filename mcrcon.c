@@ -22,7 +22,9 @@
  */
 
 /*
- * Name: mcrcon (minecraft rcon)
+ * Name:     mcrcon (minecraft rcon)
+ * Version:  0.0.5
+ * Date:     31.08.2012
  *
  * License: zlib/libpng License
  *
@@ -34,7 +36,7 @@
  *
  *
  * Description:
- *  Mcrcon is powerful minecraft rcon client / terminal with bukkit coloring support.
+ *  Mcrcon is powerful IPv6 compliant minecraft rcon client with bukkit coloring support.
  *  It is well suited for remote administration and to be used as part of automated server maintenance scripts.
  *  Does not cause "IO: Broken pipe" or "IO: Connection reset" spam in server console.
  *
@@ -45,11 +47,18 @@
  *  - Silent mode. Does not print rcon output.
  *  - Support for bukkit coloring on Windows and Linux (sh compatible shells).
  *  - Multiplatform code. Compiles on many platforms with minor changes.
+ *  - IPv6 support.
  *
  *
  * Version history:
  *
  * 0.0.5
+ *
+ *  - IPv6 support!
+ *     * Thanks to 'Tanja84dk' for addressing the real need of IPv6.
+ *
+ *  - Fixed bug causing crash / segmentation fault (invalid write) when receiving malformed rcon packet.
+ *
  *  - Program makes use of C99 feature (variable-length arrays) so "-std=gnu99" flag on
  *    GCC-compiler must be used to avoid unecessary warnings.
  *
@@ -98,16 +107,20 @@
  *
  *
  * TODO:
- *  - Make the receive buffer dynamic
- *  - Change some of the packet size issues to fatal errors
- *  - Code cleanups
- *  - Check global variables (remove if possible)
- *  - Add some protocol checks (proper packet id check etc..)
- *  - Preprocessor (#ifdef / #ifndef) cleanups
+ *  - Make the receive buffer dynamic??
+ *  - Change some of the packet size issues to fatal errors.
+ *  - Code cleanups.
+ *  - Check global variables (remove if possible).
+ *  - Add some protocol checks (proper packet id check etc..).
+ *  - Preprocessor (#ifdef / #ifndef) cleanups.
  *  - Follow valve rcon protocol standard strictly?
  *  - Multiple packet support if minecraft supports it?!
  *  - Investigate if player chat messages gets sent through rcon.
  *    If they are, the messaging system requires rewriting.
+ *  - Name resolving should be integrated to connection creation function.
+ *  - Dont try to cleanup the socket if not authenticated
+ *  - Better sockets error reporting
+ *  - Better error function (VA_ARGS support)
  *
  *
  * Bug reports and feature requests to tiiffi_at_gmail_dot_com.
@@ -169,9 +182,9 @@ void            error(char *errstring);
 void            print_color(int color);
 #endif
 
-struct in_addr  net_resolve(char *host);
+struct addrinfo *net_resolve(char *host, char *port);
 void            net_close_socket(int sd);
-int             net_open_socket(char *host, int port);
+int             net_open_socket(char *host, char *port);
 int             net_send_packet(int sd, rc_packet *packet);
 rc_packet*      net_recv_packet(int sd);
 #ifdef _WIN32
@@ -207,7 +220,7 @@ void exit_proc(void) {
 }
 
 /* Check windows & linux behaviour !!! */
-void sighandler(int sig) {
+void sighandler(/*int sig*/) {
     connection_alive = 0;
     #ifndef _WIN32
       exit(-1);
@@ -221,7 +234,7 @@ int main(int argc, char *argv[])
 
     char *host = NULL;
     char *pass = "";
-    int port = 25575;
+    char *port = "25575";
 
     if(argc < 2) usage();
 
@@ -231,7 +244,7 @@ int main(int argc, char *argv[])
         switch(opt)
         {
             case 'H': host = optarg;        break;
-            case 'P': port = atoi(optarg);  break;
+            case 'P': port = optarg;        break;
             case 'p': pass = optarg;        break;
             case 'C':
             case 'c': print_colors = 0;     break;
@@ -259,11 +272,6 @@ int main(int argc, char *argv[])
 
     if(host == NULL) {
         fputs("Host not defined. Check -H flag.\n\n", stdout);
-        usage();
-    }
-
-    if(port <= 0) {
-        fputs("Invalid port. Check -P flag.\n\n", stdout);
         usage();
     }
 
@@ -355,33 +363,29 @@ void net_init_WSA(void)
 }
 #endif
 
-struct in_addr net_resolve(char *host)
+struct addrinfo *net_resolve(char *host, char *port)
 {
-    struct in_addr address;
+    /* !!! This function should be integrated to open_socket function for cleaner code !!! */
 
-    struct sockaddr_in *sockaddr_ipv4;
+    //struct in_addr6 serveraddr;
     struct addrinfo hints, *result;
     int ret;
 
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
+    hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
+    /* hints.ai_flags    = AI_NUMERICSERV; // Windows retardism */
 
-    ret = getaddrinfo(host, NULL, &hints, &result);
+    ret = getaddrinfo(host, port, &hints, &result);
     if(ret != 0)
     {
+        if(ret == EAI_SERVICE) fprintf(stderr, "Invalid port (%s).\n", port);
         fprintf(stderr, "Error: Unable to resolve hostname (%s).\n", host);
         exit(-1);
     }
 
-    sockaddr_ipv4 = (struct sockaddr_in *) result->ai_addr;
-
-    address = sockaddr_ipv4->sin_addr;
-
-    freeaddrinfo(result);
-
-    return address;
+    return result;
 }
 
 /* socket close and cleanup */
@@ -396,31 +400,33 @@ void net_close_socket(int sd)
 }
 
 /* Opens and connects socket */
-int net_open_socket(char *host, int port)
+int net_open_socket(char *host, char *port)
 {
     int sd;
-    struct sockaddr_in sa;
 
-    memset(&sa, 0, sizeof(sa));             /* Set structure full of zeros. */
-    sa.sin_family = AF_INET;                /* Address Family Inet = Protocol Family Inet. */
-    sa.sin_port = htons(port);              /* Port number. */
-    sa.sin_addr = net_resolve(host);        /* resolve host. */
+    struct addrinfo *serverinfo;
 
-	if((sd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+    serverinfo = net_resolve(host, port);
+
+    sd = socket(serverinfo->ai_family, serverinfo->ai_socktype, serverinfo->ai_protocol);
+    if(sd < 0)
 	{
         #ifdef _WIN32
             WSACleanup();
         #endif
+        freeaddrinfo(serverinfo);
         error("Error: cannot create socket.\n");
 	}
 
-    if(connect(sd, (struct sockaddr *)&sa, sizeof(sa)) != 0)
+    if(connect(sd, serverinfo->ai_addr, serverinfo->ai_addrlen) != 0)
     {
         net_close_socket(sd);
         fprintf(stderr, "Error: connection failed (%s).\n", host);
+        freeaddrinfo(serverinfo);
         exit(-1);
     }
 
+    freeaddrinfo(serverinfo);
     return sd;
 }
 
@@ -468,6 +474,7 @@ rc_packet *net_recv_packet(int sd)
 
     if(psize < 10 || psize > DATA_BUFFSIZE) {
         fprintf(stderr, "Warning: invalid packet size (%d). Must over 10 and less than %d.\n", psize, DATA_BUFFSIZE);
+        if(psize > DATA_BUFFSIZE  || psize < 0) psize = DATA_BUFFSIZE;
         net_clean_incoming(sd, psize);
         return NULL;
     }
@@ -713,4 +720,3 @@ int get_line(char *buffer, int bsize)
 
     return len;
 }
-
