@@ -1,16 +1,30 @@
-OUTPUT := mcrcon
+BIN_NAME := mcrcon
 SRC_FILE := mcrcon.c
-SYSROOT := /
+VERSION := 0.0.5
+DIST_NAME := $(BIN_NAME)-$(VERSION)
+PACKAGE_NAME := $(DIST_NAME).rpm
+WORKSPACE := $(shell mktemp -d)
+CFLAGS := -O2 -Wall -g
+BINDIR := usr/bin
 
-all: mcrecon.c
 
 
-mcrecon.c:
-	$(CC) $(SRC_FILE) -o $(OUTPUT)
+all: $(BIN_NAME)
+	@rm -rf $(WORKSPACE)
 
-install: mcrecon.c
-	cp $(OUTPUT) $(SYSROOT)usr/bin/$(OUTPUT)
 
+$(BIN_NAME): $(SRC_FILE)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SRC_FILE) -o $(BIN_NAME)
+
+$(PACKAGE_NAME): $(BIN_NAME)
+	rpmbuild -bb rpm/$(BIN_NAME).spec
+
+dist: $(BIN_NAME)
+	cp -r . $(WORKSPACE)/$(DIST_NAME)
+	tar -C $(WORKSPACE) -czf $(DIST_NAME).tar.gz .
+
+install: $(SRC_FILE)
+	install -D -t $(DESTDIR)/$(BINDIR) $(BIN_NAME)
 
 .PHONY clean:
-	rm -rf $(OUTPUT)
+	rm -rf $(BIN_NAME)
